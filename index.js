@@ -59,50 +59,6 @@ const handleError = (error, res) => {
   res.json({ error })
 }
 
-const base64UrlEncode = (byteArray) => {
-  const charCodes = String.fromCharCode(...byteArray);
-  return window.btoa(charCodes)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
-}
-
-const sha256 = async (verifier) => {
-  const msgBuffer = new TextEncoder('utf-8').encode(verifier);
-  // hash the message
-  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-  return new Uint8Array(hashBuffer);
-}
-
-const generateRandomStateOrNonce = () => {
-  const randomBytes = crypto.randomBytes(32);
-  return base64UrlEncode(randomBytes);
-}
-
-const generateVerifierChallengePair = async () => {
-  const randomBytes = crypto.randomBytes(32);
-  const verifier = base64UrlEncode(randomBytes);
-  console.log('Verifier:', verifier);
-  const challenge = await sha256(verifier).then(base64UrlEncode);
-  console.log('Challenge:', challenge)
-  return { verifier, challenge };
-}
-
-const buildAuthorizationUrl = (clientId, challenge, redirectUri, state, nonce, scopes) => {
-  const search = {
-    client_id: clientId,
-    code_challenge: challenge,
-    code_challenge_method: 'S256',
-    redirect_uri: redirectUri,
-    scope: scopes.join(' '),
-    response_type: 'code',
-    nonce: nonce,
-    state: state
-  };
-  const searchString = Object.entries(search).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
-  return `https://secure.stitch.money/connect/authorize?${searchString}`;
-}
-
 /** ============ GQL ================ */
 
 /**
@@ -376,30 +332,6 @@ app.options('/*', (req, res) => {
   });
   res.statusCode = 200;
   res.send();
-});
-
-app.get('/authCodeUrl', async (req, res) => {
-  console.log('Get Auth Code Url');
-  res.set({
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "*",
-    "Access-Control-Allow-Headers": "*"
-  });
-
-  const verifierCHallengePair = await generateVerifierChallengePair();
-  const nonce = generateRandomStateOrNonce();
-  const state = generateRandomStateOrNonce();
-
-  const authUrl = await buildAuthorizationUrl(
-    CLIENT_ID,
-    verifierCHallengePair.challenge,
-    'http://localhost:4200/auth',
-    state,
-    nonce,
-    ['openid', 'accounts', 'accountholders'],
-  );
-  
-  res.json({ authUrl });
 });
 
 app.listen(port, () => {
