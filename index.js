@@ -59,6 +59,50 @@ const handleError = (error, res) => {
   res.json({ error })
 }
 
+const base64UrlEncode = (byteArray) => {
+  const charCodes = String.fromCharCode(...byteArray);
+  return window.btoa(charCodes)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
+}
+
+const sha256 = async (verifier) => {
+  const msgBuffer = new TextEncoder('utf-8').encode(verifier);
+  // hash the message
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  return new Uint8Array(hashBuffer);
+}
+
+const generateRandomStateOrNonce = () => {
+  const randomBytes = crypto.randomBytes(32);
+  return base64UrlEncode(randomBytes);
+}
+
+const generateVerifierChallengePair = async () => {
+  const randomBytes = crypto.randomBytes(32);
+  const verifier = base64UrlEncode(randomBytes);
+  console.log('Verifier:', verifier);
+  const challenge = await sha256(verifier).then(base64UrlEncode);
+  console.log('Challenge:', challenge)
+  return { verifier, challenge };
+}
+
+const buildAuthorizationUrl = (clientId, challenge, redirectUri, state, nonce, scopes) => {
+  const search = {
+    client_id: clientId,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    redirect_uri: redirectUri,
+    scope: scopes.join(' '),
+    response_type: 'code',
+    nonce: nonce,
+    state: state
+  };
+  const searchString = Object.entries(search).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  return `https://secure.stitch.money/connect/authorize?${searchString}`;
+}
+
 /** ============ GQL ================ */
 
 /**
@@ -135,7 +179,12 @@ const CreatePaymentRequest = async (
 const IncomeEstimation = async () => { };
 
 const BankAccountVerificationRequest = async (
-
+  token,
+  accountNumber,
+  bankId,
+  branchCode,
+  accountType,
+  accountHolder
 ) => {
 
   const bankAccountVerificationQuery = gqlTag`
@@ -167,12 +216,21 @@ const BankAccountVerificationRequest = async (
     }`;
 
   const response = await axios.post(STITCH_GQL_URL,
-    { query: graphql.print(bankAccountVerificationQuery) },
+    {
+      query: graphql.print(bankAccountVerificationQuery),
+      variables: {
+        accountNumber,
+        bankId,
+        branchCode: (branchCode) ? branchCode : undefined,
+        accountType: (accountType) ? accountType : undefined,
+        accountHolder
+      }
+    },
     { headers: { Authorization: `Bearer ${token}` } }
   );
 
-  if (response.error) console.log(response.error)
-  else console.log(response.data);
+  if (response.error) console.log(response.error);
+  else console.log(JSON.stringify(response.data, null, 2));
 
   return response.data;
 };
@@ -206,12 +264,7 @@ app.get('/generateJWT', (req, res) => {
   }
 });
 
-/**
-  * @param clientId Client Id = test-1e11230b-446e-4894-a23e-1ad187f87d57
-  * @param clientAssertion JWT token
-  * @param scopes = [ client_paymentrequest, client_bankaccountverification, client_imageupload, client_businesslookup ]
-  * @returns 
-  */
+// Get client token
 app.post('/retrieveTokenUsingClientAssertion', async (req, res) => {
   console.log(`Retrieve Token Using Client Assertion, ${JSON.stringify(req.body, null, 2)}`);
   res.set({
@@ -261,7 +314,7 @@ app.post('/retrieveTokenUsingClientAssertion', async (req, res) => {
   }
 });
 
-
+// Create payment request url
 app.post('/createPaymentRequest', async (req, res) => {
   console.log(`Create Payment Request: ${JSON.stringify(req.body, null, 2)}`);
   res.set({
@@ -289,6 +342,32 @@ app.post('/createPaymentRequest', async (req, res) => {
 
 });
 
+app.post('/verifyBankAccount', async (req, res) => {
+  console.log(`Verify bank account, ${JSON.stringify(req.body, null, 2)}`);
+  res.set({
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "*",
+    "Access-Control-Allow-Headers": "*"
+  });
+
+  const args = req.body;
+
+  try {
+    const result = await BankAccountVerificationRequest(
+      args.token,
+      args.accountNumber,
+      args.bankId,
+      args?.branchCode,
+      args?.accountType,
+      args.accountHolder
+    );
+
+    res.json(result);
+  } catch (error) {
+    handleError(error, res);
+  }
+});
+
 app.options('/*', (req, res) => {
   res.set({
     "Access-Control-Allow-Origin": "*",
@@ -297,6 +376,30 @@ app.options('/*', (req, res) => {
   });
   res.statusCode = 200;
   res.send();
+});
+
+app.get('/authCodeUrl', async (req, res) => {
+  console.log('Get Auth Code Url');
+  res.set({
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "*",
+    "Access-Control-Allow-Headers": "*"
+  });
+
+  const verifierCHallengePair = await generateVerifierChallengePair();
+  const nonce = generateRandomStateOrNonce();
+  const state = generateRandomStateOrNonce();
+
+  const authUrl = await buildAuthorizationUrl(
+    CLIENT_ID,
+    verifierCHallengePair.challenge,
+    'http://localhost:4200/auth',
+    state,
+    nonce,
+    ['openid', 'accounts', 'accountholders'],
+  );
+  
+  res.json({ authUrl });
 });
 
 app.listen(port, () => {
