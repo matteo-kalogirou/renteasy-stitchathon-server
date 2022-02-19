@@ -7,8 +7,12 @@ const bodyParser = require('body-parser');
 const app = express();
 const axios = require('axios').default;
 
+const graphql = require('graphql');
+const gqlTag = require('graphql-tag');
+
 const port = 3000;
 const CLIENT_ID = "test-1e11230b-446e-4894-a23e-1ad187f87d57";
+const STITCH_GQL_URL = 'https://api.stitch.money/graphql';
 
 app.set('json spaces', 2);
 app.use(bodyParser.json());
@@ -55,15 +59,134 @@ const handleError = (error, res) => {
   res.json({ error })
 }
 
+/** ============ GQL ================ */
+
+/**
+ * Used to generate a payment request url
+ * @param {*} amount { quantity: "12.34",  currency: "ZAR"}
+ * @param {*} payerReference 
+ * @param {*} beneficiaryReference 
+ * @param {*} externalReference 
+ * @param {*} beneficiaryName 
+ * @param {*} beneficiaryBankId 
+ * @param {*} beneficiaryAccountNumber 
+ */
+const CreatePaymentRequest = async (
+  token,
+  amount,
+  payerReference,
+  beneficiaryReference,
+  externalReference,
+  beneficiaryName,
+  beneficiaryBankId,
+  beneficiaryAccountNumber
+) => {
+
+  const createPaymentRequestMutation = gqlTag`
+      mutation CreatePaymentRequest(
+        $amount: MoneyInput!,
+        $payerReference: String!,
+        $beneficiaryReference: String!,
+        $externalReference: String,
+        $beneficiaryName: String!,
+        $beneficiaryBankId: BankBeneficiaryBankId!,
+        $beneficiaryAccountNumber: String!) {
+      clientPaymentInitiationRequestCreate(input: {
+          amount: $amount,
+          payerReference: $payerReference,
+          beneficiaryReference: $beneficiaryReference,
+          externalReference: $externalReference,
+          beneficiary: {
+              bankAccount: {
+                  name: $beneficiaryName,
+                  bankId: $beneficiaryBankId,
+                  accountNumber: $beneficiaryAccountNumber
+              }
+          }
+        }) {
+        paymentInitiationRequest {
+          id
+          url
+        }
+      }
+    }
+  `;
+
+  const response = await axios.post(STITCH_GQL_URL,
+    {
+      query: graphql.print(createPaymentRequestMutation),
+      variables: {
+        amount,
+        payerReference,
+        beneficiaryReference,
+        externalReference: (externalReference) ? (externalReference) : undefined,
+        beneficiaryName,
+        beneficiaryBankId,
+        beneficiaryAccountNumber
+      }
+    },
+    { headers: { Authorization: `Bearer ${token}` } });
+
+  console.log(response.data);
+  console.log(response.error);
+  return response.data;
+}
+
+const IncomeEstimation = async () => { };
+
+const BankAccountVerificationRequest = async () => {
+
+  const bankAccountVerificationQuery = gqlTag`
+    query BankAccountVerification(
+        $accountNumber: String!,
+        $bankId: BankAccountVerificationBankIdInput!,
+        $branchCode: String,
+        $accountType: AccountType,
+        $accountHolder: AccountHolderBankAccountVerificationInput!
+    ) {
+        client {
+            verifyBankAccountDetails(input: {
+                accountNumber: $accountNumber,
+                bankId: $bankId,
+                branchCode: $branchCode,
+                accountType: $accountType
+                accountHolder: $accountHolder
+            }) {
+                accountNumber
+                bankId
+                branchCode
+                accountType
+                accountTypeVerificationResult
+                accountVerificationResult
+                accountOpen
+                accountOpenForMoreThanThreeMonths
+            }
+        }
+    }`;
+
+
+};
+
 /** ========== ROUTING ============== */
 
 app.get('/', (req, res) => {
+  res.set({
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "*",
+    "Access-Control-Allow-Headers": "*"
+  });
   res.send('Hello World!');
 });
 
 // Generate the JWT token
 app.get('/generateJWT', (req, res) => {
   console.log('Generating JWT');
+  res.set({
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "*",
+    "Access-Control-Allow-Headers": "*"
+  });
+  
   try {
     const jwt = generateJWT();
     res.statusCode = 200;
@@ -73,7 +196,6 @@ app.get('/generateJWT', (req, res) => {
   }
 });
 
-
 /**
   * @param clientId Client Id = test-1e11230b-446e-4894-a23e-1ad187f87d57
   * @param clientAssertion JWT token
@@ -82,16 +204,21 @@ app.get('/generateJWT', (req, res) => {
   */
 app.post('/retrieveTokenUsingClientAssertion', async (req, res) => {
   console.log(`Retrieve Token Using Client Assertion, ${JSON.stringify(req.body, null, 2)}`);
+  res.set({
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "*",
+    "Access-Control-Allow-Headers": "*"
+  });
 
   const clientAssertion = generateJWT();
 
   const scopes = req.body.scopes
-  || [
-    'client_paymentrequest',
-    'client_bankaccountverification',
-    'client_imageupload',
-    'client_businesslookup'
-  ];
+    || [
+      'client_paymentrequest',
+      'client_bankaccountverification',
+      'client_imageupload',
+      'client_businesslookup'
+    ];
 
   try {
     const body = {
@@ -104,17 +231,17 @@ app.post('/retrieveTokenUsingClientAssertion', async (req, res) => {
     };
     const bodyString = Object.entries(body).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
 
-    console.log('body: ', body );
+    console.log('body: ', body);
 
     const response = await axios({
       method: 'post',
-      url:'https://secure.stitch.money/connect/token',
+      url: 'https://secure.stitch.money/connect/token',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       data: bodyString
     });
 
     console.log(response);
-    
+
     const responseData = response.data;
     console.log('Tokens: ', responseData);
 
@@ -122,6 +249,34 @@ app.post('/retrieveTokenUsingClientAssertion', async (req, res) => {
   } catch (error) {
     handleError(error, res);
   }
+});
+
+
+app.post('/createPaymentRequest', async (req, res) => {
+  console.log(`Create Payment Request: ${JSON.stringify(req.body, null, 2)}`);
+  res.set({
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "*",
+    "Access-Control-Allow-Headers": "*"
+  });
+
+  const args = req.body;
+
+  try {
+    const result = await CreatePaymentRequest(
+      args.token,
+      args.amount,
+      args.payerReference,
+      args.beneficiaryReference,
+      args?.externalReference,
+      args.beneficiaryName,
+      args.beneficiaryBankId,
+      args.beneficiaryAccountNumber
+    );
+
+    res.json(result);
+  } catch (error) { handleError(error, res); }
+
 });
 
 app.listen(port, () => {
