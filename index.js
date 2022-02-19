@@ -134,7 +134,9 @@ const CreatePaymentRequest = async (
 
 const IncomeEstimation = async () => { };
 
-const BankAccountVerificationRequest = async () => {
+const BankAccountVerificationRequest = async (
+
+) => {
 
   const bankAccountVerificationQuery = gqlTag`
     query BankAccountVerification(
@@ -164,7 +166,15 @@ const BankAccountVerificationRequest = async () => {
         }
     }`;
 
+  const response = await axios.post(STITCH_GQL_URL,
+    { query: graphql.print(bankAccountVerificationQuery) },
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
 
+  if (response.error) console.log(response.error)
+  else console.log(response.data);
+
+  return response.data;
 };
 
 /** ========== ROUTING ============== */
@@ -186,7 +196,7 @@ app.get('/generateJWT', (req, res) => {
     "Access-Control-Allow-Methods": "*",
     "Access-Control-Allow-Headers": "*"
   });
-  
+
   try {
     const jwt = generateJWT();
     res.statusCode = 200;
@@ -277,6 +287,16 @@ app.post('/createPaymentRequest', async (req, res) => {
     res.json(result);
   } catch (error) { handleError(error, res); }
 
+});
+
+app.options('/*', (req, res) => {
+  res.set({
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "*",
+    "Access-Control-Allow-Headers": "*"
+  });
+  res.statusCode = 200;
+  res.send();
 });
 
 app.listen(port, () => {
